@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class KeyboardController:
     """
-    Low-level keyboard controller wrapper supporting pynput and pyautogui.
+    Low-level keyboard controller wrapper supporting pynput with pyautogui fallback.
     Maintains an exact set of currently held keys and guarantees they are all
     released upon program exit or error.
     """
@@ -39,7 +39,6 @@ class KeyboardController:
             signal.signal(signal.SIGINT, self._signal_handler)
             signal.signal(signal.SIGTERM, self._signal_handler)
         except (ValueError, AttributeError):
-            # Signal handling might be restricted in some non-main thread environments
             pass
 
     def _init_driver(self) -> None:
@@ -57,8 +56,8 @@ class KeyboardController:
         # Fallback to pyautogui
         try:
             import pyautogui
-            pyautogui.PAUSE = 0.001  # Minimize delay
-            pyautogui.FAILSAFE = False  # Prevent corner mouse crash during game control
+            pyautogui.PAUSE = 0.001
+            pyautogui.FAILSAFE = False
             self._driver = pyautogui
             self._use_pynput = False
             logger.info("KeyboardController: Initialized using 'pyautogui' driver.")
@@ -80,7 +79,7 @@ class KeyboardController:
         key = key.lower()
         with self._lock:
             if key in self._held_keys:
-                return False  # Already pressed
+                return False
 
             try:
                 if self._use_pynput and self._driver:
@@ -88,10 +87,18 @@ class KeyboardController:
                 elif self._driver:
                     self._driver.keyDown(key)
                 self._held_keys.add(key)
+                logger.debug(f"[KEYBOARD] Key DOWN: '{key}'")
                 return True
             except Exception as e:
-                logger.error(f"Error pressing key '{key}': {e}")
-                return False
+                # If pynput failed, attempt fallback to pyautogui
+                try:
+                    import pyautogui
+                    pyautogui.keyDown(key)
+                    self._held_keys.add(key)
+                    return True
+                except Exception as ex:
+                    logger.error(f"Error pressing key '{key}': {e} | Fallback error: {ex}")
+                    return False
 
     def release(self, key: str) -> bool:
         """
@@ -108,13 +115,18 @@ class KeyboardController:
                     self._driver.release(key)
                 elif self._driver:
                     self._driver.keyUp(key)
+                logger.debug(f"[KEYBOARD] Key UP: '{key}'")
             except Exception as e:
-                logger.error(f"Error releasing key '{key}': {e}")
+                try:
+                    import pyautogui
+                    pyautogui.keyUp(key)
+                except Exception as ex:
+                    logger.error(f"Error releasing key '{key}': {e} | Fallback: {ex}")
             finally:
                 self._held_keys.discard(key)
             return True
 
-    def tap(self, key: str, duration: float = 0.05) -> None:
+    def tap(self, key: str, duration: float = 0.10) -> None:
         """
         Presses a key down, waits for `duration` seconds, and releases it.
         Runs in a lightweight background thread to prevent blocking the vision loop.
@@ -142,7 +154,11 @@ class KeyboardController:
                     elif self._driver:
                         self._driver.keyUp(key)
                 except Exception as e:
-                    logger.error(f"Error releasing key '{key}' during cleanup: {e}")
+                    try:
+                        import pyautogui
+                        pyautogui.keyUp(key)
+                    except Exception:
+                        pass
             self._held_keys.clear()
 
     def is_pressed(self, key: str) -> bool:

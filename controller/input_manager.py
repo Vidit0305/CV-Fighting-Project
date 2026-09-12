@@ -28,8 +28,8 @@ class InputManager:
         key_mappings: Dict[str, str],
         gesture_to_action: Dict[str, str],
         attack_cooldown_sec: float = 0.35,
-        attack_tap_duration_sec: float = 0.05,
-        test_mode: bool = True,
+        attack_tap_duration_sec: float = 0.10,
+        test_mode: bool = False,
     ):
         self.keyboard = keyboard
         self.key_mappings = key_mappings
@@ -44,13 +44,13 @@ class InputManager:
         # Action / Attack tracking
         self.last_attack_time: float = 0.0
         self.active_action_gesture: str = "NONE"
-        self.action_latched: bool = False  # True if current continuous gesture already fired
+        self.action_latched: bool = False
 
         # HUD feedback tracking
         self.last_triggered_action: Optional[str] = None
         self.last_triggered_key: Optional[str] = None
         self.last_triggered_time: float = 0.0
-        self.feedback_duration: float = 0.5  # Seconds visual indicator remains highlighted
+        self.feedback_duration: float = 0.7  # Seconds visual indicator remains highlighted
 
         self.is_active: bool = True
 
@@ -62,7 +62,7 @@ class InputManager:
         self.keyboard.release_all()
         self.held_movement_keys.clear()
         self.test_mode = not self.test_mode
-        logger.info(f"InputManager: TEST MODE is now {'ENABLED' if self.test_mode else 'DISABLED (LIVE)'}")
+        logger.info(f"InputManager: TEST MODE is now {'ENABLED (Safe Simulation)' if self.test_mode else 'DISABLED (LIVE GAME KEYS ACTIVE!)'}")
         return self.test_mode
 
     def update_movement(self, active_directions: Set[str]) -> Tuple[Set[str], Set[str]]:
@@ -73,7 +73,6 @@ class InputManager:
         if not self.is_active:
             return set(), set()
 
-        # Translate directions to keys (e.g. "LEFT" -> "a")
         target_keys = {
             self.key_mappings[d]
             for d in active_directions
@@ -92,6 +91,10 @@ class InputManager:
         for k in keys_to_press:
             if not self.test_mode:
                 self.keyboard.press(k)
+                logger.info(f"🎮 [MOVEMENT] Pressed & Holding: '{k.upper()}'")
+
+        if keys_to_release and not keys_to_press and not target_keys:
+            logger.debug("🎮 [MOVEMENT] Returned to NEUTRAL (Released all movement keys)")
 
         self.held_movement_keys = target_keys
         return self.held_movement_keys, active_directions
@@ -103,7 +106,7 @@ class InputManager:
           1. Debouncing (gesture must be confirmed stable).
           2. Single-shot latch (holding a fist will fire ONCE until relaxed).
           3. Cooldown window (prevents rapid spamming).
-        Returns the triggered action name (e.g. 'ATTACK_2') or None.
+        Returns the triggered action name (e.g. 'ATTACK_1') or None.
         """
         if not self.is_active:
             return None
@@ -130,8 +133,11 @@ class InputManager:
 
                 if key_to_press:
                     if not self.test_mode:
-                        # Send single atomic key tap
+                        # Send single atomic key tap to OS
                         self.keyboard.tap(key_to_press, self.attack_tap_duration_sec)
+                        logger.info(f"⚡ [ACTION] Sent Key '{key_to_press.upper()}' to OS ({action_name}) via {current_gesture}!")
+                    else:
+                        logger.info(f"[TEST MODE] Detected {current_gesture} -> Simulated Key '{key_to_press.upper()}' (Keys disabled in Test Mode)")
 
                     # Update state and latch
                     self.last_attack_time = now
@@ -142,16 +148,12 @@ class InputManager:
                     self.last_triggered_action = action_name
                     self.last_triggered_key = key_to_press
                     self.last_triggered_time = now
-
-                    logger.debug(f"Triggered action '{action_name}' (Key: {key_to_press}) via {current_gesture}")
                     return action_name
 
         return None
 
     def get_action_feedback(self) -> Tuple[Optional[str], Optional[str], bool]:
-        """
-        Returns (action_name, key, is_fresh_trigger) for HUD rendering.
-        """
+        """Returns (action_name, key, is_fresh_trigger) for HUD rendering."""
         now = time.time()
         is_active = (now - self.last_triggered_time) < self.feedback_duration
         if is_active:

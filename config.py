@@ -18,8 +18,8 @@ CAMERA_HEIGHT = 720
 DISPLAY_WIDTH = 1920
 DISPLAY_HEIGHT = 1080
 
-# Launch in Fullscreen borderless mode by default
-FULLSCREEN_DEFAULT = True
+# Launch in Fullscreen mode (False allows clean side-by-side tiling with browser)
+FULLSCREEN_DEFAULT = False
 
 # Target frame rate for video capture and processing loop
 TARGET_FPS = 30
@@ -34,7 +34,6 @@ MIRROR_VIEW = True
 # Hand assignment method:
 #   "screen_position": Hand on the left side of the screen controls movement;
 #                      Hand on the right side of the screen controls attacks.
-#   "mediapipe":       Uses MediaPipe's classified handedness.
 HAND_ASSIGNMENT_MODE = "screen_position"
 
 # Which role belongs to which hand / screen side
@@ -68,7 +67,8 @@ GESTURE_STABILITY_FRAMES = 4
 ATTACK_COOLDOWN_SEC = 0.35
 
 # Duration (in seconds) that an attack key is held down before releasing.
-ATTACK_KEY_TAP_DURATION_SEC = 0.05
+# 0.10s (100ms) guarantees HTML5 / browser games register the keypress cleanly.
+ATTACK_KEY_TAP_DURATION_SEC = 0.10
 
 # MediaPipe model complexity: 0 = Lite (ultra-fast, real-time CPU), 1 = Full
 MODEL_COMPLEXITY = 0
@@ -114,7 +114,9 @@ GESTURE_TO_ACTION = {
 # ==============================================================================
 # 6. OPERATING MODES & SAFETY DEFAULTS
 # ==============================================================================
-TEST_MODE_DEFAULT = True
+# LIVE GAME CONTROL by default (keys are immediately sent to the game!)
+TEST_MODE_DEFAULT = False
+
 DEBUG_MODE_DEFAULT = False
 KEYBOARD_BACKEND = "pynput"
 

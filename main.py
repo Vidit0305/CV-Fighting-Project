@@ -4,8 +4,9 @@ Main Application Entry Point.
 
 Controls existing browser fighting games using real-time hand gestures and movements.
 Features:
-- Fullscreen borderless edge-to-edge camera feed (zero white/gray bars)
-- Clean, sleek, minimalist gaming HUD without clunky opaque boxes
+- LIVE GAME CONTROL by default (keys immediately sent to browser game)
+- Global hotkey listener (T, C, ESC work even when browser window is focused)
+- Edge-to-edge scaling with zero white/gray sidebars
 - Threaded high-FPS camera capture for silky-smooth video playback
 - Asynchronous fail-safe keyboard control (continuous key-hold + single-tap attacks)
 """
@@ -18,6 +19,7 @@ import time
 from typing import Optional, Tuple
 import cv2
 import numpy as np
+from pynput import keyboard as pynput_kb
 
 # Project Modules
 import config
@@ -48,7 +50,6 @@ class ThreadedCamera:
     def __init__(self, camera_index: int = 0, width: int = 1280, height: int = 720, fps: int = 30):
         self.cap = cv2.VideoCapture(camera_index)
 
-        # Optimize camera hardware parameters
         try:
             self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         except Exception:
@@ -66,7 +67,6 @@ class ThreadedCamera:
         self.running = True
         self.lock = threading.Lock()
 
-        # Dedicated background frame fetcher
         self.thread = threading.Thread(target=self._update_loop, daemon=True)
         self.thread.start()
 
@@ -101,15 +101,12 @@ def fit_to_screen(frame: np.ndarray, target_w: int = 1920, target_h: int = 1080)
     target_aspect = target_w / target_h
     current_aspect = w / h
 
-    # If camera aspect ratio differs from display aspect ratio, crop excess
     if abs(current_aspect - target_aspect) > 0.02:
         if current_aspect < target_aspect:
-            # Camera frame is taller than screen: crop top and bottom
             new_h = int(w / target_aspect)
             y_start = max(0, (h - new_h) // 2)
             frame = frame[y_start : y_start + new_h, :]
         else:
-            # Camera frame is wider than screen: crop left and right
             new_w = int(h * target_aspect)
             x_start = max(0, (w - new_w) // 2)
             frame = frame[:, x_start : x_start + new_w]
@@ -132,17 +129,18 @@ def parse_arguments() -> argparse.Namespace:
         "--test",
         action="store_true",
         default=config.TEST_MODE_DEFAULT,
-        help="Start in TEST MODE (safe simulation)",
+        help="Start in TEST MODE (safe simulation with keyboard disabled)",
     )
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Start directly in LIVE GAME CONTROL MODE",
+        help="Start directly in LIVE GAME CONTROL MODE (default)",
     )
     parser.add_argument(
-        "--windowed",
+        "--fullscreen",
         action="store_true",
-        help="Start in windowed mode instead of fullscreen",
+        default=config.FULLSCREEN_DEFAULT,
+        help="Launch in fullscreen mode",
     )
     parser.add_argument(
         "--debug",
@@ -185,16 +183,16 @@ def main() -> None:
     """Main application loop."""
     args = parse_arguments()
 
-    test_mode = False if args.live else args.test
+    test_mode = args.test if not args.live else False
     debug_mode = args.debug
-    is_fullscreen = not args.windowed
+    is_fullscreen = args.fullscreen
 
     print("\n" + "=" * 64)
     print("  CV FIGHTER — Vision-Based Game Controller")
     print("=" * 64)
-    print(f"  Mode:            {'TEST MODE (Safe Simulation)' if test_mode else 'LIVE GAME CONTROL'}")
+    print(f"  Mode:            {'TEST MODE (Safe Simulation)' if test_mode else 'LIVE GAME CONTROL (Keys Active!)'}")
     print(f"  Fullscreen:      {'ENABLED' if is_fullscreen else 'WINDOWED'}")
-    print(f"  Display Res:     {config.DISPLAY_WIDTH}x{config.DISPLAY_HEIGHT}")
+    print(f"  Tap Duration:    {config.ATTACK_KEY_TAP_DURATION_SEC * 1000:.0f}ms")
     print("  Controls:")
     print("    [ESC]          Emergency Stop & Exit")
     print("    [T]            Toggle Test Mode vs Live Game Control")
@@ -212,7 +210,7 @@ def main() -> None:
             fps=config.TARGET_FPS,
         )
     except Exception as e:
-        logger.error(f"Failed to open camera ({e}). Ensure webcam is plugged in and not in use by another app.")
+        logger.error(f"Failed to open camera ({e}). Ensure webcam is plugged in.")
         sys.exit(1)
 
     # Initialize Subsystems
@@ -248,36 +246,63 @@ def main() -> None:
     fps_counter = FPSCounter()
     hud = HUDDisplay()
 
-    # Create clean OpenCV window (WINDOW_GUI_NORMAL removes Qt toolbars and sidebars)
+    # Window configuration
     window_title = "CV Fighter — Vision Game Controller"
     cv2.namedWindow(window_title, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
 
     if is_fullscreen:
         cv2.setWindowProperty(window_title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     else:
-        cv2.resizeWindow(window_title, config.DISPLAY_WIDTH, config.DISPLAY_HEIGHT)
+        cv2.resizeWindow(window_title, 960, 540)
 
-    logger.info("CV Fighter controller initialized successfully. Running smooth loop...")
+    # State variables for hotkey handling
+    exit_requested = threading.Event()
+    current_movement_hand: list = [None]  # Container for thread-safe access
+
+    # Global Hotkey Listener (works even when browser window is focused)
+    def on_global_press(key):
+        try:
+            if key == pynput_kb.Key.esc:
+                logger.info("Global [ESC] intercepted: Emergency Stop!")
+                exit_requested.set()
+            elif hasattr(key, "char") and key.char:
+                c = key.char.lower()
+                if c == "t":
+                    st = input_manager.toggle_test_mode()
+                    logger.info(f"Global [T] pressed: {'TEST MODE' if st else 'LIVE CONTROL'}")
+                elif c == "c":
+                    anchor = movement_detector.calibrate(current_movement_hand[0])
+                    hud.trigger_calibration_notice()
+                    logger.info(f"Global [C] pressed: Calibrated anchor to ({anchor[0]:.2f}, {anchor[1]:.2f})")
+        except Exception:
+            pass
+
+    global_listener = pynput_kb.Listener(on_press=on_global_press)
+    global_listener.daemon = True
+    global_listener.start()
+
+    logger.info("CV Fighter controller running. LIVE GAME CONTROL IS ACTIVE!")
 
     try:
-        while True:
+        while not exit_requested.is_set():
             ret, frame = camera.read()
             if not ret or frame is None:
                 time.sleep(0.01)
                 continue
 
-            # 1. Scale & crop frame edge-to-edge to eliminate white/gray sidebars
+            # 1. Scale & crop frame edge-to-edge
             screen_frame = fit_to_screen(
                 frame, target_w=config.DISPLAY_WIDTH, target_h=config.DISPLAY_HEIGHT
             )
 
-            # 2. Process MediaPipe Hand Detection on mirrored edge-to-edge frame
+            # 2. Process MediaPipe Hand Detection on mirrored frame
             screen_frame, detected_hands = hand_detector.process(
                 screen_frame, mirror=config.MIRROR_VIEW
             )
 
             # 3. Separate Hands by Assigned Role
             movement_hand, attack_hand = separate_hands(detected_hands)
+            current_movement_hand[0] = movement_hand
 
             # 4. Update Movement Tracking (Left Hand)
             movement_state = movement_detector.update(movement_hand)
@@ -285,7 +310,7 @@ def main() -> None:
             # 5. Update Gesture Recognition (Right Hand)
             gesture_state = gesture_recognizer.update(attack_hand)
 
-            # 6. Dispatch Game Controls
+            # 6. Dispatch Game Controls (Sends real keystrokes when not in test mode)
             input_manager.update_movement(movement_state.active_directions)
             input_manager.update_action(gesture_state)
 
@@ -327,7 +352,7 @@ def main() -> None:
             # 9. Display Frame
             cv2.imshow(window_title, screen_frame)
 
-            # 10. Process Hotkeys
+            # 10. Process Local Window Hotkeys
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord("q"), ord("Q")):
                 logger.info("Exit requested by user. Shutting down...")
@@ -338,14 +363,14 @@ def main() -> None:
             elif key in (ord("c"), ord("C")):
                 anchor = movement_detector.calibrate(movement_hand)
                 hud.trigger_calibration_notice()
-                logger.info(f"Calibrated neutral anchor to: ({anchor[0]:.2f}, {anchor[1]:.2f})")
+                logger.info(f"Calibrated anchor to: ({anchor[0]:.2f}, {anchor[1]:.2f})")
             elif key in (ord("f"), ord("F")):
                 is_fullscreen = not is_fullscreen
                 if is_fullscreen:
                     cv2.setWindowProperty(window_title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
                 else:
                     cv2.setWindowProperty(window_title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
-                    cv2.resizeWindow(window_title, 1280, 720)
+                    cv2.resizeWindow(window_title, 960, 540)
                 logger.info(f"Fullscreen: {'ENABLED' if is_fullscreen else 'WINDOWED'}")
             elif key in (ord("d"), ord("D")):
                 debug_mode = not debug_mode
@@ -355,7 +380,7 @@ def main() -> None:
         logger.warning("KeyboardInterrupt intercepted! Exiting cleanly...")
 
     finally:
-        logger.info("Executing safety cleanup...")
+        logger.info("Executing safety cleanup: releasing all held keys...")
         input_manager.cleanup()
         hand_detector.close()
         camera.release()

@@ -1,7 +1,8 @@
 """
 HUD Display Module for CV Fighter
 Clean, minimalist, gaming-grade Heads-Up Display:
-- Minimal floating top pill for mode and FPS (no giant opaque header boxes)
+- Minimal floating top pill for mode and FPS
+- High-visibility status indicator showing when keys are LIVE and active
 - Non-intrusive directional pills that only appear when moving
 - Sleek action chips that only appear when combat gestures are detected
 - Edge-to-edge fullscreen clean canvas
@@ -41,7 +42,6 @@ class HUDDisplay:
         bg_color: Tuple[int, int, int] = (15, 15, 20),
         border_color: Tuple[int, int, int] = (60, 60, 80),
         alpha: float = 0.65,
-        radius: int = 10,
     ) -> None:
         """Draws a sleek translucent rounded pill."""
         overlay = frame.copy()
@@ -65,25 +65,25 @@ class HUDDisplay:
         h, w, _ = frame.shape
 
         # -------------------------------------------------------------
-        # 1. FLOATING TOP STATUS PILL (COMPACT, SLEEK, UNCLUTTERED)
+        # 1. FLOATING TOP STATUS PILL (PROMINENT LIVE/TEST INDICATOR)
         # -------------------------------------------------------------
-        pill_w = 440
+        pill_w = 460
         pill_h = 36
         pill_x = (w - pill_w) // 2
         pill_y = 15
 
         if test_mode:
-            status_text = "TEST MODE — (Press T for Game Control)"
-            dot_color = (0, 215, 255)  # Glowing Amber
+            status_text = "TEST MODE — (Press T for Game Keys)"
+            dot_color = (0, 215, 255)  # Amber
             pill_border = (0, 180, 220)
             pill_bg = (12, 28, 38)
         else:
-            status_text = "LIVE GAME CONTROLLER ACTIVE"
-            dot_color = (60, 240, 80)   # Vivid Green
-            pill_border = (50, 180, 70)
-            pill_bg = (12, 34, 18)
+            status_text = "LIVE GAME CONTROL — KEYS ACTIVE!"
+            dot_color = (60, 255, 80)   # Glowing Vivid Green
+            pill_border = (60, 240, 80)
+            pill_bg = (10, 40, 18)
 
-        self.draw_glass_pill(frame, pill_x, pill_y, pill_w, pill_h, bg_color=pill_bg, border_color=pill_border, alpha=0.75)
+        self.draw_glass_pill(frame, pill_x, pill_y, pill_w, pill_h, bg_color=pill_bg, border_color=pill_border, alpha=0.80)
 
         # Status Glowing Dot
         cv2.circle(frame, (pill_x + 18, pill_y + 18), 5, dot_color, -1, cv2.LINE_AA)
@@ -172,12 +172,11 @@ class HUDDisplay:
             )
 
         # -------------------------------------------------------------
-        # 4. DYNAMIC ACTION PILL (APPEARS AT BOTTOM RIGHT ONLY WHEN GESTURE IS ACTIVE)
+        # 4. DYNAMIC ACTION PILL (APPEARS AT BOTTOM RIGHT ONLY WHEN GESTURE DETECTED)
         # -------------------------------------------------------------
         confirmed_gest = gesture_state.confirmed_gesture
         raw_gest = gesture_state.raw_gesture
 
-        # Show action feedback if an attack gesture is active or debouncing
         display_gest = confirmed_gest if confirmed_gest != "NONE" else raw_gest
 
         if display_gest in input_mgr.gesture_to_action:
@@ -190,12 +189,10 @@ class HUDDisplay:
             act_pill_x = w - act_pill_w - 35
             act_pill_y = h - 104
 
-            # Pill background
             border_c = COLORS["SUCCESS"] if gesture_state.is_stable else COLORS["SECONDARY"]
             self.draw_glass_pill(frame, act_pill_x, act_pill_y, act_pill_w, act_pill_h,
                                  bg_color=(30, 25, 15), border_color=border_c, alpha=0.85)
 
-            # Action Text
             cv2.putText(
                 frame,
                 f"[{mapped_key}]  {gest_label}",
@@ -217,22 +214,22 @@ class HUDDisplay:
             cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), border_c, -1)
 
         # -------------------------------------------------------------
-        # 5. ACTION TRIGGER FLASH BANNER (WHEN KEY FIRES)
+        # 5. ACTION TRIGGER FLASH BANNER (HIGH VISIBILITY WHEN KEY FIRES)
         # -------------------------------------------------------------
         last_action, last_key, is_fresh = input_mgr.get_action_feedback()
         if is_fresh and last_key:
-            flash_w = 260
-            flash_h = 38
+            flash_w = 280
+            flash_h = 42
             flash_x = w - flash_w - 35
-            flash_y = h - 150
+            flash_y = h - 155
             self.draw_glass_pill(frame, flash_x, flash_y, flash_w, flash_h,
-                                 bg_color=(10, 60, 20), border_color=COLORS["SUCCESS"], alpha=0.9)
+                                 bg_color=(10, 80, 25), border_color=COLORS["SUCCESS"], alpha=0.92)
             cv2.putText(
                 frame,
-                f"⚡ TRIGGERED [{last_key.upper()}]",
-                (flash_x + 24, flash_y + 25),
+                f"⚡ SENT KEY: [{last_key.upper()}]",
+                (flash_x + 22, flash_y + 28),
                 self.font_bold,
-                0.58,
+                0.62,
                 (255, 255, 255),
                 2,
                 cv2.LINE_AA,
@@ -266,7 +263,7 @@ class HUDDisplay:
             self._render_minimal_debug(frame, movement_state, gesture_state, input_mgr)
 
         # -------------------------------------------------------------
-        # 8. SUBTLE BOTTOM CONTROL HINTS (ONE LOW-PROFILE LINE)
+        # 8. SUBTLE BOTTOM CONTROL HINTS
         # -------------------------------------------------------------
         hint_text = "[ESC] Exit   •   [T] Mode   •   [C] Calibrate   •   [F] Fullscreen   •   [D] Debug"
         cv2.putText(
