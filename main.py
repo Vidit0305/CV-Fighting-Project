@@ -3,15 +3,21 @@ CV Fighter — Vision-Based Game Controller
 Main Application Entry Point.
 
 Controls existing browser fighting games using real-time hand gestures and movements.
-WEBCAM -> MEDIAPIPE -> GESTURE RECOGNITION -> KEYBOARD INPUT -> BROWSER GAME
+Features:
+- Fullscreen borderless edge-to-edge camera feed (zero white/gray bars)
+- Clean, sleek, minimalist gaming HUD without clunky opaque boxes
+- Threaded high-FPS camera capture for silky-smooth video playback
+- Asynchronous fail-safe keyboard control (continuous key-hold + single-tap attacks)
 """
 
 import argparse
 import logging
 import sys
+import threading
 import time
 from typing import Optional, Tuple
 import cv2
+import numpy as np
 
 # Project Modules
 import config
@@ -23,13 +29,92 @@ from vision.hand_detector import HandDetector, HandData
 from vision.gesture_recognizer import GestureRecognizer
 from vision.movement_detector import MovementDetector
 
-# Configure clean logging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("CVFighter")
+
+
+class ThreadedCamera:
+    """
+    Dedicated threaded camera reader.
+    Captures frames asynchronously in a background thread to prevent
+    inference latency from blocking the camera sensor and to eliminate frame stutter.
+    """
+
+    def __init__(self, camera_index: int = 0, width: int = 1280, height: int = 720, fps: int = 30):
+        self.cap = cv2.VideoCapture(camera_index)
+
+        # Optimize camera hardware parameters
+        try:
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        except Exception:
+            pass
+
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap.set(cv2.CAP_PROP_FPS, fps)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Unable to open camera at index {camera_index}")
+
+        self.ret, self.frame = self.cap.read()
+        self.running = True
+        self.lock = threading.Lock()
+
+        # Dedicated background frame fetcher
+        self.thread = threading.Thread(target=self._update_loop, daemon=True)
+        self.thread.start()
+
+    def _update_loop(self) -> None:
+        while self.running:
+            ret, frame = self.cap.read()
+            if ret and frame is not None:
+                with self.lock:
+                    self.ret = True
+                    self.frame = frame
+            else:
+                time.sleep(0.01)
+
+    def read(self) -> Tuple[bool, Optional[np.ndarray]]:
+        with self.lock:
+            if not self.ret or self.frame is None:
+                return False, None
+            return True, self.frame.copy()
+
+    def release(self) -> None:
+        self.running = False
+        self.thread.join(timeout=1.0)
+        self.cap.release()
+
+
+def fit_to_screen(frame: np.ndarray, target_w: int = 1920, target_h: int = 1080) -> np.ndarray:
+    """
+    Scales and crops the camera frame edge-to-edge to eliminate white or black borders.
+    Preserves natural aspect ratio by cropping any excess rather than stretching.
+    """
+    h, w = frame.shape[:2]
+    target_aspect = target_w / target_h
+    current_aspect = w / h
+
+    # If camera aspect ratio differs from display aspect ratio, crop excess
+    if abs(current_aspect - target_aspect) > 0.02:
+        if current_aspect < target_aspect:
+            # Camera frame is taller than screen: crop top and bottom
+            new_h = int(w / target_aspect)
+            y_start = max(0, (h - new_h) // 2)
+            frame = frame[y_start : y_start + new_h, :]
+        else:
+            # Camera frame is wider than screen: crop left and right
+            new_w = int(h * target_aspect)
+            x_start = max(0, (w - new_w) // 2)
+            frame = frame[:, x_start : x_start + new_w]
+
+    return cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -47,12 +132,17 @@ def parse_arguments() -> argparse.Namespace:
         "--test",
         action="store_true",
         default=config.TEST_MODE_DEFAULT,
-        help="Start in TEST MODE (gestures visualized on HUD, keyboard emission disabled)",
+        help="Start in TEST MODE (safe simulation)",
     )
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Start directly in LIVE GAME CONTROL MODE (sends real keystrokes to OS)",
+        help="Start directly in LIVE GAME CONTROL MODE",
+    )
+    parser.add_argument(
+        "--windowed",
+        action="store_true",
+        help="Start in windowed mode instead of fullscreen",
     )
     parser.add_argument(
         "--debug",
@@ -60,77 +150,14 @@ def parse_arguments() -> argparse.Namespace:
         default=config.DEBUG_MODE_DEFAULT,
         help="Enable on-screen debug diagnostic metrics",
     )
-    parser.add_argument(
-        "--width",
-        type=int,
-        default=config.CAMERA_WIDTH,
-        help=f"Camera frame width (default: {config.CAMERA_WIDTH})",
-    )
-    parser.add_argument(
-        "--height",
-        type=int,
-        default=config.CAMERA_HEIGHT,
-        help=f"Camera frame height (default: {config.CAMERA_HEIGHT})",
-    )
     return parser.parse_args()
-
-
-def open_camera(camera_index: int, width: int, height: int) -> cv2.VideoCapture:
-    """
-    Attempts to open the specified camera device. If unavailable, probes
-    alternate camera indices and raises a descriptive runtime error if none open.
-    """
-    logger.info(f"Opening camera index {camera_index}...")
-    cap = cv2.VideoCapture(camera_index)
-
-    # Set requested resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, config.TARGET_FPS)
-
-    if not cap.isOpened():
-        logger.warning(f"Could not open camera index {camera_index}. Probing indices 0, 1, 2...")
-        for idx in [0, 1, 2]:
-            if idx == camera_index:
-                continue
-            test_cap = cv2.VideoCapture(idx)
-            if test_cap.isOpened():
-                ret, _ = test_cap.read()
-                if ret:
-                    logger.info(f"Successfully found working camera at index {idx}!")
-                    test_cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                    test_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                    return test_cap
-                test_cap.release()
-
-        error_msg = (
-            f"\n"
-            f"===============================================================\n"
-            f"ERROR: Unable to open webcam at index {camera_index}!\n"
-            f"===============================================================\n"
-            f"Troubleshooting Steps:\n"
-            f"1. Ensure your laptop webcam is plugged in or enabled.\n"
-            f"2. Ensure no other program (Zoom, Teams, Discord, Browser) is\n"
-            f"   currently using the webcam.\n"
-            f"3. Try passing a different camera index: python main.py --camera 1\n"
-            f"4. On Windows 10/11, check Windows Privacy Settings -> Camera ->\n"
-            f"   'Allow apps to access your camera' is turned ON.\n"
-            f"==============================================================="
-        )
-        logger.error(error_msg)
-        raise RuntimeError("No working webcam device could be opened.")
-
-    return cap
 
 
 def separate_hands(
     hands: list[HandData],
     assignment_mode: str = config.HAND_ASSIGNMENT_MODE,
 ) -> Tuple[Optional[HandData], Optional[HandData]]:
-    """
-    Separates detected hands into (MovementHand, AttackHand) based on screen
-    position or MediaPipe classification.
-    """
+    """Separates detected hands into (MovementHand, AttackHand)."""
     if not hands:
         return None, None
 
@@ -138,15 +165,12 @@ def separate_hands(
     attack_hand: Optional[HandData] = None
 
     if assignment_mode == "screen_position":
-        # Hand on the left half of mirrored view controls movement;
-        # Hand on the right half controls attacks.
         for hand in hands:
             if hand.screen_side == "left" and movement_hand is None:
                 movement_hand = hand
             elif hand.screen_side == "right" and attack_hand is None:
                 attack_hand = hand
     else:
-        # Based on MediaPipe's classified handedness
         for hand in hands:
             hand_label = hand.mp_handedness.lower()
             if hand_label == config.MOVEMENT_HAND.lower() and movement_hand is None:
@@ -161,31 +185,39 @@ def main() -> None:
     """Main application loop."""
     args = parse_arguments()
 
-    # Determine initial test mode (live flag overrides test default)
     test_mode = False if args.live else args.test
     debug_mode = args.debug
+    is_fullscreen = not args.windowed
 
     print("\n" + "=" * 64)
     print("  CV FIGHTER — Vision-Based Game Controller")
     print("=" * 64)
     print(f"  Mode:            {'TEST MODE (Safe Simulation)' if test_mode else 'LIVE GAME CONTROL'}")
-    print(f"  Camera Index:    {args.camera}")
-    print(f"  Resolution:      {args.width}x{args.height}")
-    print(f"  Key Backend:     {config.KEYBOARD_BACKEND}")
+    print(f"  Fullscreen:      {'ENABLED' if is_fullscreen else 'WINDOWED'}")
+    print(f"  Display Res:     {config.DISPLAY_WIDTH}x{config.DISPLAY_HEIGHT}")
     print("  Controls:")
-    print("    [ESC]          Emergency Stop and Exit")
+    print("    [ESC]          Emergency Stop & Exit")
     print("    [T]            Toggle Test Mode vs Live Game Control")
-    print("    [C]            Calibrate Neutral Anchor")
+    print("    [C]            Calibrate Neutral Movement Anchor")
+    print("    [F]            Toggle Fullscreen")
     print("    [D]            Toggle Debug Overlay")
     print("=" * 64 + "\n")
 
-    # Initialize Core Subsystems
+    # Initialize Threaded Camera
     try:
-        cap = open_camera(args.camera, args.width, args.height)
-    except RuntimeError as e:
+        camera = ThreadedCamera(
+            camera_index=args.camera,
+            width=config.CAMERA_WIDTH,
+            height=config.CAMERA_HEIGHT,
+            fps=config.TARGET_FPS,
+        )
+    except Exception as e:
+        logger.error(f"Failed to open camera ({e}). Ensure webcam is plugged in and not in use by another app.")
         sys.exit(1)
 
+    # Initialize Subsystems
     hand_detector = HandDetector(
+        model_complexity=config.MODEL_COMPLEXITY,
         min_detection_confidence=config.MIN_DETECTION_CONFIDENCE,
         min_tracking_confidence=config.MIN_TRACKING_CONFIDENCE,
     )
@@ -216,63 +248,72 @@ def main() -> None:
     fps_counter = FPSCounter()
     hud = HUDDisplay()
 
+    # Create clean OpenCV window (WINDOW_GUI_NORMAL removes Qt toolbars and sidebars)
     window_title = "CV Fighter — Vision Game Controller"
-    cv2.namedWindow(window_title, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_title, args.width, args.height)
+    cv2.namedWindow(window_title, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
 
-    logger.info("CV Fighter controller initialized successfully. Running main loop...")
+    if is_fullscreen:
+        cv2.setWindowProperty(window_title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    else:
+        cv2.resizeWindow(window_title, config.DISPLAY_WIDTH, config.DISPLAY_HEIGHT)
+
+    logger.info("CV Fighter controller initialized successfully. Running smooth loop...")
 
     try:
         while True:
-            ret, frame = cap.read()
+            ret, frame = camera.read()
             if not ret or frame is None:
-                logger.warning("Failed to grab camera frame. Attempting to reconnect...")
-                time.sleep(0.1)
+                time.sleep(0.01)
                 continue
 
-            # 1. Process Vision & Hand Landmarks (mirrored for intuitive selfie perspective)
-            frame, detected_hands = hand_detector.process(frame, mirror=config.MIRROR_VIEW)
+            # 1. Scale & crop frame edge-to-edge to eliminate white/gray sidebars
+            screen_frame = fit_to_screen(
+                frame, target_w=config.DISPLAY_WIDTH, target_h=config.DISPLAY_HEIGHT
+            )
 
-            # 2. Separate Hands by Assigned Role
+            # 2. Process MediaPipe Hand Detection on mirrored edge-to-edge frame
+            screen_frame, detected_hands = hand_detector.process(
+                screen_frame, mirror=config.MIRROR_VIEW
+            )
+
+            # 3. Separate Hands by Assigned Role
             movement_hand, attack_hand = separate_hands(detected_hands)
 
-            # 3. Update Movement Tracking (Left Hand)
+            # 4. Update Movement Tracking (Left Hand)
             movement_state = movement_detector.update(movement_hand)
 
-            # 4. Update Gesture Recognition (Right Hand)
+            # 5. Update Gesture Recognition (Right Hand)
             gesture_state = gesture_recognizer.update(attack_hand)
 
-            # 5. Dispatch Controls to Input Manager
+            # 6. Dispatch Game Controls
             input_manager.update_movement(movement_state.active_directions)
             input_manager.update_action(gesture_state)
 
-            # 6. Render Hand Skeletons
+            # 7. Render Sleek Glowing Skeletons
             if movement_hand:
                 hand_detector.draw_skeleton(
-                    frame,
+                    screen_frame,
                     movement_hand,
-                    bone_color=(255, 180, 0),    # Cyan/Blue
-                    joint_color=(255, 255, 255),
-                    palm_color=(0, 255, 100),
+                    bone_color=config.COLORS["PRIMARY"],
+                    joint_color=config.COLORS["WHITE"],
                     draw_labels=debug_mode,
                 )
 
             if attack_hand:
                 hand_detector.draw_skeleton(
-                    frame,
+                    screen_frame,
                     attack_hand,
-                    bone_color=(0, 180, 255),    # Orange/Gold
-                    joint_color=(255, 255, 255),
-                    palm_color=(0, 200, 255),
+                    bone_color=config.COLORS["SECONDARY"],
+                    joint_color=config.COLORS["WHITE"],
                     draw_labels=debug_mode,
                 )
 
-            # 7. Update Performance & Render HUD Overlay
+            # 8. Update FPS and Render Minimalist Gaming HUD
             fps_counter.update()
             fps_str = fps_counter.get_fps_str()
 
             hud.render(
-                frame=frame,
+                frame=screen_frame,
                 movement_state=movement_state,
                 gesture_state=gesture_state,
                 input_mgr=input_manager,
@@ -283,13 +324,13 @@ def main() -> None:
                 attack_hand=attack_hand,
             )
 
-            # 8. Display Canvas
-            cv2.imshow(window_title, frame)
+            # 9. Display Frame
+            cv2.imshow(window_title, screen_frame)
 
-            # 9. Handle Hotkeys
+            # 10. Process Hotkeys
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord("q"), ord("Q")):
-                logger.info("Exit requested by user (ESC / Q). Shutting down...")
+                logger.info("Exit requested by user. Shutting down...")
                 break
             elif key in (ord("t"), ord("T")):
                 new_state = input_manager.toggle_test_mode()
@@ -298,6 +339,14 @@ def main() -> None:
                 anchor = movement_detector.calibrate(movement_hand)
                 hud.trigger_calibration_notice()
                 logger.info(f"Calibrated neutral anchor to: ({anchor[0]:.2f}, {anchor[1]:.2f})")
+            elif key in (ord("f"), ord("F")):
+                is_fullscreen = not is_fullscreen
+                if is_fullscreen:
+                    cv2.setWindowProperty(window_title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                else:
+                    cv2.setWindowProperty(window_title, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+                    cv2.resizeWindow(window_title, 1280, 720)
+                logger.info(f"Fullscreen: {'ENABLED' if is_fullscreen else 'WINDOWED'}")
             elif key in (ord("d"), ord("D")):
                 debug_mode = not debug_mode
                 logger.info(f"Debug overlay: {'ENABLED' if debug_mode else 'DISABLED'}")
@@ -306,11 +355,10 @@ def main() -> None:
         logger.warning("KeyboardInterrupt intercepted! Exiting cleanly...")
 
     finally:
-        # Guarantee Safe Cleanup
-        logger.info("Executing safety cleanup: releasing all keys and camera resources...")
+        logger.info("Executing safety cleanup...")
         input_manager.cleanup()
         hand_detector.close()
-        cap.release()
+        camera.release()
         cv2.destroyAllWindows()
         logger.info("CV Fighter stopped safely.")
 

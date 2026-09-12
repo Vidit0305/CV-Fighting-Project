@@ -1,11 +1,10 @@
 """
 HUD Display Module for CV Fighter
-Draws a gaming-grade, cyberpunk-styled Heads-Up Display directly on the OpenCV canvas:
-  - Live FPS and camera diagnostics
-  - Mode badge (Test Mode vs Live Game Control)
-  - Movement D-Pad / virtual joystick with deadzone boundaries and directional cues
-  - Action / attack gesture recognizer cards with stability bars and trigger flashes
-  - Comprehensive debug diagnostics overlay
+Clean, minimalist, gaming-grade Heads-Up Display:
+- Minimal floating top pill for mode and FPS (no giant opaque header boxes)
+- Non-intrusive directional pills that only appear when moving
+- Sleek action chips that only appear when combat gestures are detected
+- Edge-to-edge fullscreen clean canvas
 """
 
 from typing import Dict, List, Optional, Set, Tuple
@@ -21,29 +20,34 @@ from vision.movement_detector import MovementState
 
 
 class HUDDisplay:
-    """Renders all visual feedback, status badges, and diagnostics on the video frame."""
+    """Renders a sleek, ultra-clean, minimalist gaming HUD directly on the frame."""
 
     def __init__(self):
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.font_bold = cv2.FONT_HERSHEY_DUPLEX
         self.calibration_banner_time: float = 0.0
 
-    @staticmethod
-    def draw_transparent_rect(
-        frame: np.ndarray,
-        pt1: Tuple[int, int],
-        pt2: Tuple[int, int],
-        color: Tuple[int, int, int],
-        alpha: float = 0.5,
-    ) -> None:
-        """Draws a semi-transparent filled rectangle on the frame."""
-        overlay = frame.copy()
-        cv2.rectangle(overlay, pt1, pt2, color, -1)
-        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-
     def trigger_calibration_notice(self) -> None:
         """Triggers a temporary on-screen notice that anchor was calibrated."""
         self.calibration_banner_time = time.time()
+
+    @staticmethod
+    def draw_glass_pill(
+        frame: np.ndarray,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        bg_color: Tuple[int, int, int] = (15, 15, 20),
+        border_color: Tuple[int, int, int] = (60, 60, 80),
+        alpha: float = 0.65,
+        radius: int = 10,
+    ) -> None:
+        """Draws a sleek translucent rounded pill."""
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x, y), (x + w, y + h), bg_color, -1)
+        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), border_color, 1, cv2.LINE_AA)
 
     def render(
         self,
@@ -57,305 +61,197 @@ class HUDDisplay:
         movement_hand: Optional[HandData],
         attack_hand: Optional[HandData],
     ) -> np.ndarray:
-        """Renders the complete HUD overlay onto the given frame."""
+        """Renders minimal, non-obtrusive HUD elements onto the frame."""
         h, w, _ = frame.shape
 
         # -------------------------------------------------------------
-        # 1. TOP HEADER BAR
+        # 1. FLOATING TOP STATUS PILL (COMPACT, SLEEK, UNCLUTTERED)
         # -------------------------------------------------------------
-        self.draw_transparent_rect(frame, (0, 0), (w, 55), (15, 15, 20), alpha=0.75)
-        cv2.line(frame, (0, 55), (w, 55), COLORS["PRIMARY"], 2)
+        pill_w = 440
+        pill_h = 36
+        pill_x = (w - pill_w) // 2
+        pill_y = 15
 
-        # Title
-        cv2.putText(
-            frame,
-            "CV FIGHTER",
-            (20, 36),
-            self.font_bold,
-            0.9,
-            COLORS["PRIMARY"],
-            2,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            frame,
-            "CONTROLLER",
-            (200, 36),
-            self.font,
-            0.65,
-            COLORS["WHITE"],
-            1,
-            cv2.LINE_AA,
-        )
-
-        # Camera status
-        cv2.circle(frame, (380, 28), 6, COLORS["SUCCESS"], -1, cv2.LINE_AA)
-        cv2.putText(
-            frame,
-            "CAMERA: ACTIVE",
-            (395, 33),
-            self.font,
-            0.5,
-            COLORS["NEUTRAL"],
-            1,
-            cv2.LINE_AA,
-        )
-
-        # FPS Display
-        cv2.putText(
-            frame,
-            f"FPS: {fps_str}",
-            (560, 33),
-            self.font,
-            0.55,
-            COLORS["SECONDARY"],
-            1,
-            cv2.LINE_AA,
-        )
-
-        # Mode Badge (Center-Right)
         if test_mode:
-            badge_text = "TEST MODE — INPUT DISABLED (Press T)"
-            badge_color = (0, 220, 255)  # Bright Yellow/Amber
-            bg_color = (10, 80, 100)
+            status_text = "TEST MODE — (Press T for Game Control)"
+            dot_color = (0, 215, 255)  # Glowing Amber
+            pill_border = (0, 180, 220)
+            pill_bg = (12, 28, 38)
         else:
-            badge_text = "LIVE GAME CONTROL ACTIVE (Press T)"
-            badge_color = COLORS["SUCCESS"]
-            bg_color = (10, 80, 20)
+            status_text = "LIVE GAME CONTROLLER ACTIVE"
+            dot_color = (60, 240, 80)   # Vivid Green
+            pill_border = (50, 180, 70)
+            pill_bg = (12, 34, 18)
 
-        badge_x = w - 460
-        self.draw_transparent_rect(frame, (badge_x - 10, 10), (w - 20, 45), bg_color, alpha=0.85)
-        cv2.rectangle(frame, (badge_x - 10, 10), (w - 20, 45), badge_color, 1)
+        self.draw_glass_pill(frame, pill_x, pill_y, pill_w, pill_h, bg_color=pill_bg, border_color=pill_border, alpha=0.75)
+
+        # Status Glowing Dot
+        cv2.circle(frame, (pill_x + 18, pill_y + 18), 5, dot_color, -1, cv2.LINE_AA)
+        cv2.circle(frame, (pill_x + 18, pill_y + 18), 7, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Status Label
         cv2.putText(
             frame,
-            badge_text,
-            (badge_x, 32),
-            self.font,
-            0.52,
-            badge_color,
-            1,
-            cv2.LINE_AA,
-        )
-
-        # -------------------------------------------------------------
-        # 2. LEFT PANEL: MOVEMENT CONTROLS (LEFT HAND)
-        # -------------------------------------------------------------
-        panel_w = 260
-        panel_y1 = 65
-        panel_y2 = 230
-        self.draw_transparent_rect(frame, (15, panel_y1), (15 + panel_w, panel_y2), (18, 18, 24), alpha=0.7)
-        cv2.rectangle(frame, (15, panel_y1), (15 + panel_w, panel_y2), (60, 60, 80), 1)
-
-        cv2.putText(
-            frame,
-            "LEFT HAND — MOVEMENT",
-            (25, panel_y1 + 25),
+            status_text,
+            (pill_x + 32, pill_y + 24),
             self.font_bold,
-            0.52,
-            COLORS["PRIMARY"],
+            0.46,
+            (255, 255, 255),
             1,
             cv2.LINE_AA,
         )
 
-        # Tracking status
-        is_mov_tracked = movement_hand is not None
-        status_text = "TRACKED" if is_mov_tracked else "SEARCHING..."
-        status_color = COLORS["SUCCESS"] if is_mov_tracked else COLORS["WARNING"]
+        # FPS Tag on Right of Pill
         cv2.putText(
             frame,
-            f"Status: {status_text}",
-            (25, panel_y1 + 50),
-            self.font,
-            0.48,
-            status_color,
-            1,
-            cv2.LINE_AA,
-        )
-
-        # Direction and active key
-        dir_text = movement_state.primary_direction
-        cv2.putText(
-            frame,
-            f"Direction: {dir_text}",
-            (25, panel_y1 + 80),
-            self.font_bold,
-            0.6,
-            COLORS["WHITE"] if dir_text == "NEUTRAL" else COLORS["SECONDARY"],
-            1,
-            cv2.LINE_AA,
-        )
-
-        held_keys_str = " + ".join([k.upper() for k in sorted(input_mgr.held_movement_keys)]) or "NONE"
-        cv2.putText(
-            frame,
-            f"Key Held: [{held_keys_str}]",
-            (25, panel_y1 + 115),
-            self.font,
-            0.55,
-            COLORS["ACTIVE_ZONE"] if held_keys_str != "NONE" else COLORS["NEUTRAL"],
-            2 if held_keys_str != "NONE" else 1,
-            cv2.LINE_AA,
-        )
-
-        cv2.putText(
-            frame,
-            "Action: Continuous Hold",
-            (25, panel_y1 + 145),
+            f"{fps_str} FPS",
+            (pill_x + pill_w - 65, pill_y + 24),
             self.font,
             0.42,
-            (140, 140, 140),
+            (190, 190, 190),
             1,
             cv2.LINE_AA,
         )
 
         # -------------------------------------------------------------
-        # 3. MOVEMENT JOYSTICK / DEADZONE OVERLAY ON SCREEN
+        # 2. MOVEMENT JOYSTICK / DEADZONE (MINIMALIST & CLEAN)
         # -------------------------------------------------------------
-        # Pixel coordinates for neutral anchor and deadzones
         anchor_px_x = int(movement_state.anchor_pos[0] * w)
         anchor_px_y = int(movement_state.anchor_pos[1] * h)
         deadzone_px_w = int(0.08 * w)
         deadzone_px_h = int(0.08 * h)
 
-        # Deadzone box
-        dz_top_left = (anchor_px_x - deadzone_px_w, anchor_px_y - deadzone_px_h)
-        dz_bottom_right = (anchor_px_x + deadzone_px_w, anchor_px_y + deadzone_px_h)
-        cv2.rectangle(frame, dz_top_left, dz_bottom_right, (70, 70, 90), 1, cv2.LINE_AA)
+        # Subtle thin deadzone reticle
+        dz_color = (80, 80, 100) if not movement_state.active_directions else COLORS["PRIMARY"]
+        cv2.circle(frame, (anchor_px_x, anchor_px_y), 4, dz_color, -1, cv2.LINE_AA)
+        cv2.circle(frame, (anchor_px_x, anchor_px_y), deadzone_px_w, (60, 60, 75), 1, cv2.LINE_AA)
 
-        # Anchor center crosshair
-        cv2.circle(frame, (anchor_px_x, anchor_px_y), 4, (120, 120, 140), -1, cv2.LINE_AA)
-        cv2.line(frame, (anchor_px_x - 10, anchor_px_y), (anchor_px_x + 10, anchor_px_y), (100, 100, 120), 1)
-        cv2.line(frame, (anchor_px_x, anchor_px_y - 10), (anchor_px_x, anchor_px_y + 10), (100, 100, 120), 1)
+        # Subtle small direction ticks
+        cv2.line(frame, (anchor_px_x - deadzone_px_w, anchor_px_y), (anchor_px_x - deadzone_px_w + 8, anchor_px_y), (100, 100, 120), 1)
+        cv2.line(frame, (anchor_px_x + deadzone_px_w - 8, anchor_px_y), (anchor_px_x + deadzone_px_w, anchor_px_y), (100, 100, 120), 1)
+        cv2.line(frame, (anchor_px_x, anchor_px_y - deadzone_px_h), (anchor_px_x, anchor_px_y - deadzone_px_h + 8), (100, 100, 120), 1)
+        cv2.line(frame, (anchor_px_x, anchor_px_y + deadzone_px_h - 8), (anchor_px_x, anchor_px_y + deadzone_px_h), (100, 100, 120), 1)
 
-        # Directional labels around deadzone
-        cv2.putText(frame, "W", (anchor_px_x - 7, dz_top_left[1] - 8), self.font_bold, 0.45, (160, 160, 160), 1)
-        cv2.putText(frame, "S", (anchor_px_x - 6, dz_bottom_right[1] + 18), self.font_bold, 0.45, (160, 160, 160), 1)
-        cv2.putText(frame, "A", (dz_top_left[0] - 22, anchor_px_y + 5), self.font_bold, 0.45, (160, 160, 160), 1)
-        cv2.putText(frame, "D", (dz_bottom_right[0] + 10, anchor_px_y + 5), self.font_bold, 0.45, (160, 160, 160), 1)
-
-        # If movement hand is tracked, draw vector line from anchor to current palm center
-        if is_mov_tracked:
+        # If movement hand is tracked, draw vector line to palm
+        if movement_hand is not None:
             curr_px_x = int(movement_state.current_pos[0] * w)
             curr_px_y = int(movement_state.current_pos[1] * h)
-            in_neutral = len(movement_state.active_directions) == 0
-            line_color = COLORS["PRIMARY"] if not in_neutral else (100, 180, 100)
+            is_moving = len(movement_state.active_directions) > 0
+            line_color = COLORS["PRIMARY"] if is_moving else (120, 180, 120)
 
-            # Vector line
             cv2.line(frame, (anchor_px_x, anchor_px_y), (curr_px_x, curr_px_y), line_color, 2, cv2.LINE_AA)
-            # Palm position marker
-            cv2.circle(frame, (curr_px_x, curr_px_y), 8, line_color, -1, cv2.LINE_AA)
-            cv2.circle(frame, (curr_px_x, curr_px_y), 10, COLORS["WHITE"], 1, cv2.LINE_AA)
+            cv2.circle(frame, (curr_px_x, curr_px_y), 6, line_color, -1, cv2.LINE_AA)
 
         # -------------------------------------------------------------
-        # 4. RIGHT PANEL: ACTION / ATTACK CONTROLS (RIGHT HAND)
+        # 3. DYNAMIC DIRECTIONAL PILL (APPEARS AT BOTTOM LEFT ONLY WHEN MOVING)
         # -------------------------------------------------------------
-        action_x1 = w - panel_w - 15
-        self.draw_transparent_rect(frame, (action_x1, panel_y1), (w - 15, panel_y2 + 20), (18, 18, 24), alpha=0.7)
-        cv2.rectangle(frame, (action_x1, panel_y1), (w - 15, panel_y2 + 20), (60, 60, 80), 1)
+        if movement_state.active_directions:
+            dir_str = " + ".join(sorted(movement_state.active_directions))
+            keys_str = " + ".join([k.upper() for k in sorted(input_mgr.held_movement_keys)])
 
-        cv2.putText(
-            frame,
-            "RIGHT HAND — ACTIONS",
-            (action_x1 + 10, panel_y1 + 25),
-            self.font_bold,
-            0.52,
-            COLORS["SECONDARY"],
-            1,
-            cv2.LINE_AA,
-        )
+            arrow_map = {"LEFT": "◄", "RIGHT": "►", "UP": "▲", "DOWN": "▼"}
+            arrow_icon = " ".join([arrow_map.get(d, "") for d in sorted(movement_state.active_directions)])
 
-        is_act_tracked = attack_hand is not None
-        act_status_text = "TRACKED" if is_act_tracked else "SEARCHING..."
-        act_status_color = COLORS["SUCCESS"] if is_act_tracked else COLORS["WARNING"]
-        cv2.putText(
-            frame,
-            f"Status: {act_status_text}",
-            (action_x1 + 10, panel_y1 + 50),
-            self.font,
-            0.48,
-            act_status_color,
-            1,
-            cv2.LINE_AA,
-        )
+            mov_pill_w = 260
+            mov_pill_h = 42
+            mov_pill_x = 35
+            mov_pill_y = h - 100
 
-        # Detected Gesture
-        gest_label = GESTURE_NAMES.get(gesture_state.confirmed_gesture, gesture_state.confirmed_gesture)
-        cv2.putText(
-            frame,
-            f"Gesture: {gest_label}",
-            (action_x1 + 10, panel_y1 + 80),
-            self.font_bold,
-            0.55,
-            COLORS["WHITE"] if gest_label == "Neutral / Idle" else COLORS["PRIMARY"],
-            1,
-            cv2.LINE_AA,
-        )
+            self.draw_glass_pill(frame, mov_pill_x, mov_pill_y, mov_pill_w, mov_pill_h,
+                                 bg_color=(15, 30, 45), border_color=COLORS["PRIMARY"], alpha=0.85)
 
-        # Mapped Action & Key
-        action_name = input_mgr.gesture_to_action.get(gesture_state.confirmed_gesture, "NONE")
-        action_key = KEY_MAPPINGS.get(action_name, "-").upper()
-        action_text = f"Action: {action_key} ({action_name})" if action_name != "NONE" else "Action: None"
-        cv2.putText(
-            frame,
-            action_text,
-            (action_x1 + 10, panel_y1 + 115),
-            self.font_bold,
-            0.55,
-            COLORS["SECONDARY"] if action_name != "NONE" else COLORS["NEUTRAL"],
-            1,
-            cv2.LINE_AA,
-        )
+            cv2.putText(
+                frame,
+                f"{arrow_icon} HOLD [{keys_str}] {dir_str}",
+                (mov_pill_x + 18, mov_pill_y + 27),
+                self.font_bold,
+                0.55,
+                COLORS["PRIMARY"],
+                2,
+                cv2.LINE_AA,
+            )
 
-        # Stability progress bar
-        bar_x = action_x1 + 10
-        bar_y = panel_y1 + 130
-        bar_w = panel_w - 20
-        bar_h = 10
-        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (40, 40, 50), -1)
-        stability_fill = int(bar_w * (gesture_state.stability_count / max(1, 4)))
-        fill_color = COLORS["SUCCESS"] if gesture_state.is_stable else COLORS["WARNING"]
-        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + stability_fill, bar_y + bar_h), fill_color, -1)
-        cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (80, 80, 100), 1)
+        # -------------------------------------------------------------
+        # 4. DYNAMIC ACTION PILL (APPEARS AT BOTTOM RIGHT ONLY WHEN GESTURE IS ACTIVE)
+        # -------------------------------------------------------------
+        confirmed_gest = gesture_state.confirmed_gesture
+        raw_gest = gesture_state.raw_gesture
 
-        cv2.putText(
-            frame,
-            f"Stability: {gesture_state.stability_count}/4",
-            (action_x1 + 10, panel_y1 + 155),
-            self.font,
-            0.42,
-            (160, 160, 160),
-            1,
-            cv2.LINE_AA,
-        )
+        # Show action feedback if an attack gesture is active or debouncing
+        display_gest = confirmed_gest if confirmed_gest != "NONE" else raw_gest
 
-        # Cooldown indicator
-        cooldown_elapsed = time.time() - input_mgr.last_attack_time
-        on_cooldown = cooldown_elapsed < input_mgr.attack_cooldown_sec
-        cd_text = f"Cooldown: {max(0.0, input_mgr.attack_cooldown_sec - cooldown_elapsed):.2f}s" if on_cooldown else "Cooldown: READY"
-        cd_color = COLORS["WARNING"] if on_cooldown else COLORS["SUCCESS"]
-        cv2.putText(
-            frame,
-            cd_text,
-            (action_x1 + 130, panel_y1 + 155),
-            self.font,
-            0.42,
-            cd_color,
-            1,
-            cv2.LINE_AA,
-        )
+        if display_gest in input_mgr.gesture_to_action:
+            action_name = input_mgr.gesture_to_action[display_gest]
+            mapped_key = KEY_MAPPINGS.get(action_name, "?").upper()
+            gest_label = GESTURE_NAMES.get(display_gest, display_gest).upper()
+
+            act_pill_w = 280
+            act_pill_h = 46
+            act_pill_x = w - act_pill_w - 35
+            act_pill_y = h - 104
+
+            # Pill background
+            border_c = COLORS["SUCCESS"] if gesture_state.is_stable else COLORS["SECONDARY"]
+            self.draw_glass_pill(frame, act_pill_x, act_pill_y, act_pill_w, act_pill_h,
+                                 bg_color=(30, 25, 15), border_color=border_c, alpha=0.85)
+
+            # Action Text
+            cv2.putText(
+                frame,
+                f"[{mapped_key}]  {gest_label}",
+                (act_pill_x + 16, act_pill_y + 26),
+                self.font_bold,
+                0.55,
+                COLORS["WHITE"],
+                1,
+                cv2.LINE_AA,
+            )
+
+            # Stability Progress Bar inside the pill
+            bar_x = act_pill_x + 16
+            bar_y = act_pill_y + 34
+            bar_w = act_pill_w - 32
+            bar_h = 4
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (50, 50, 60), -1)
+            fill_w = int(bar_w * (gesture_state.stability_count / 4))
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), border_c, -1)
 
         # -------------------------------------------------------------
         # 5. ACTION TRIGGER FLASH BANNER (WHEN KEY FIRES)
         # -------------------------------------------------------------
         last_action, last_key, is_fresh = input_mgr.get_action_feedback()
         if is_fresh and last_key:
-            flash_y = panel_y2 + 40
-            self.draw_transparent_rect(frame, (action_x1, flash_y), (w - 15, flash_y + 40), (20, 100, 20), alpha=0.85)
-            cv2.rectangle(frame, (action_x1, flash_y), (w - 15, flash_y + 40), COLORS["SUCCESS"], 2)
+            flash_w = 260
+            flash_h = 38
+            flash_x = w - flash_w - 35
+            flash_y = h - 150
+            self.draw_glass_pill(frame, flash_x, flash_y, flash_w, flash_h,
+                                 bg_color=(10, 60, 20), border_color=COLORS["SUCCESS"], alpha=0.9)
             cv2.putText(
                 frame,
-                f">> FIRED KEY: [{last_key.upper()}] <<",
-                (action_x1 + 25, flash_y + 26),
+                f"⚡ TRIGGERED [{last_key.upper()}]",
+                (flash_x + 24, flash_y + 25),
+                self.font_bold,
+                0.58,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+        # -------------------------------------------------------------
+        # 6. CALIBRATION NOTICE (WHEN USER PRESSES 'C')
+        # -------------------------------------------------------------
+        if (time.time() - self.calibration_banner_time) < 1.5:
+            cal_w = 340
+            cal_h = 42
+            cal_x = (w - cal_w) // 2
+            cal_y = 65
+            self.draw_glass_pill(frame, cal_x, cal_y, cal_w, cal_h,
+                                 bg_color=(15, 50, 20), border_color=COLORS["SUCCESS"], alpha=0.9)
+            cv2.putText(
+                frame,
+                "✓ ANCHOR CALIBRATED",
+                (cal_x + 40, cal_y + 27),
                 self.font_bold,
                 0.58,
                 COLORS["WHITE"],
@@ -364,111 +260,49 @@ class HUDDisplay:
             )
 
         # -------------------------------------------------------------
-        # 6. CALIBRATION NOTICE (WHEN USER PRESSES 'C')
-        # -------------------------------------------------------------
-        if (time.time() - self.calibration_banner_time) < 2.0:
-            cal_w = 400
-            cal_x = (w - cal_w) // 2
-            self.draw_transparent_rect(frame, (cal_x, 70), (cal_x + cal_w, 120), (30, 80, 30), alpha=0.9)
-            cv2.rectangle(frame, (cal_x, 70), (cal_x + cal_w, 120), COLORS["SUCCESS"], 2)
-            cv2.putText(
-                frame,
-                "NEUTRAL ANCHOR CALIBRATED!",
-                (cal_x + 30, 102),
-                self.font_bold,
-                0.62,
-                COLORS["WHITE"],
-                2,
-                cv2.LINE_AA,
-            )
-
-        # -------------------------------------------------------------
-        # 7. DEBUG OVERLAY (IF DEBUG_MODE IS ON)
+        # 7. DEBUG OVERLAY (ONLY WHEN USER TOGGLES 'D')
         # -------------------------------------------------------------
         if debug_mode:
-            self._render_debug_info(frame, movement_state, gesture_state, input_mgr, movement_hand, attack_hand)
+            self._render_minimal_debug(frame, movement_state, gesture_state, input_mgr)
 
         # -------------------------------------------------------------
-        # 8. BOTTOM CONTROLS FOOTER
+        # 8. SUBTLE BOTTOM CONTROL HINTS (ONE LOW-PROFILE LINE)
         # -------------------------------------------------------------
-        footer_y = h - 35
-        self.draw_transparent_rect(frame, (0, footer_y), (w, h), (15, 15, 20), alpha=0.8)
-        cv2.line(frame, (0, footer_y), (w, footer_y), (40, 40, 50), 1)
-
-        controls_text = "[ESC] Emergency Stop & Exit   |   [T] Toggle Test/Live Mode   |   [C] Calibrate Anchor   |   [D] Toggle Debug"
+        hint_text = "[ESC] Exit   •   [T] Mode   •   [C] Calibrate   •   [F] Fullscreen   •   [D] Debug"
         cv2.putText(
             frame,
-            controls_text,
-            (25, h - 12),
+            hint_text,
+            (w // 2 - 250, h - 16),
             self.font,
-            0.45,
-            COLORS["NEUTRAL"],
+            0.42,
+            (140, 140, 150),
             1,
             cv2.LINE_AA,
         )
 
         return frame
 
-    def _render_debug_info(
+    def _render_minimal_debug(
         self,
         frame: np.ndarray,
         movement_state: MovementState,
         gesture_state: GestureState,
         input_mgr: InputManager,
-        movement_hand: Optional[HandData],
-        attack_hand: Optional[HandData],
     ) -> None:
-        """Renders comprehensive diagnostics for troubleshooting."""
-        h, w, _ = frame.shape
-        debug_w = 520
-        debug_h = 135
-        x1 = 15
-        y1 = h - 35 - debug_h - 10
-        x2 = x1 + debug_w
-        y2 = y1 + debug_h
+        """Compact diagnostics overlay."""
+        db_w = 400
+        db_h = 80
+        x = 25
+        y = 65
+        self.draw_glass_pill(frame, x, y, db_w, db_h, bg_color=(10, 10, 15), border_color=COLORS["SECONDARY"], alpha=0.85)
 
-        self.draw_transparent_rect(frame, (x1, y1), (x2, y2), (10, 10, 15), alpha=0.85)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), COLORS["SECONDARY"], 1)
-
-        cv2.putText(frame, "DEBUG METRICS OVERLAY", (x1 + 10, y1 + 20), self.font_bold, 0.48, COLORS["SECONDARY"], 1)
-
-        # Finger states summary
         f = gesture_state.finger_states
-        fingers_str = f"Thumb:{int(f['thumb'])} | Idx:{int(f['index'])} | Mid:{int(f['middle'])} | Rng:{int(f['ring'])} | Pnk:{int(f['pinky'])}"
-        cv2.putText(frame, f"Fingers: {fingers_str}", (x1 + 10, y1 + 45), self.font, 0.42, COLORS["WHITE"], 1)
+        f_str = f"Fingers: T:{int(f['thumb'])} I:{int(f['index'])} M:{int(f['middle'])} R:{int(f['ring'])} P:{int(f['pinky'])}"
+        cv2.putText(frame, f_str, (x + 12, y + 24), self.font, 0.40, (240, 240, 240), 1, cv2.LINE_AA)
 
-        # Coordinates
-        curr_pos = movement_state.current_pos
         offset = movement_state.offset
-        cv2.putText(
-            frame,
-            f"Mov Anchor: ({movement_state.anchor_pos[0]:.2f}, {movement_state.anchor_pos[1]:.2f}) | Curr: ({curr_pos[0]:.2f}, {curr_pos[1]:.2f}) | Offset: ({offset[0]:+.2f}, {offset[1]:+.2f})",
-            (x1 + 10, y1 + 70),
-            self.font,
-            0.40,
-            COLORS["NEUTRAL"],
-            1,
-        )
+        pos_str = f"Offset: ({offset[0]:+.2f}, {offset[1]:+.2f}) | Primary: {movement_state.primary_direction}"
+        cv2.putText(frame, pos_str, (x + 12, y + 46), self.font, 0.40, COLORS["NEUTRAL"], 1, cv2.LINE_AA)
 
-        # Gesture confidence & Raw
-        cv2.putText(
-            frame,
-            f"Raw Gest: {gesture_state.raw_gesture} ({gesture_state.confidence*100:.0f}%) | Confirmed: {gesture_state.confirmed_gesture} | Latched: {input_mgr.action_latched}",
-            (x1 + 10, y1 + 95),
-            self.font,
-            0.40,
-            COLORS["NEUTRAL"],
-            1,
-        )
-
-        # Driver & All Held Keys
         held_keys = list(input_mgr.keyboard.get_held_keys())
-        cv2.putText(
-            frame,
-            f"Backend: {input_mgr.keyboard.backend_name} | OS Held Keys: {held_keys}",
-            (x1 + 10, y1 + 120),
-            self.font,
-            0.40,
-            COLORS["SUCCESS"] if held_keys else COLORS["NEUTRAL"],
-            1,
-        )
+        cv2.putText(frame, f"OS Keys Held: {held_keys}", (x + 12, y + 68), self.font, 0.40, COLORS["SUCCESS"], 1, cv2.LINE_AA)
